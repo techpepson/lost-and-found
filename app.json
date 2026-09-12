@@ -6,11 +6,14 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lostandfound",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "app.lostandfound",
+      "supportsTablet": false
     },
     "android": {
+      "package": "app.lostandfound",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -33,6 +36,14 @@
             "image": "./assets/images/splash-icon.png",
             "imageWidth": 76
           }
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Lost & Found to access your photos so you can attach a picture of a lost or found item.",
+          "cameraPermission": "Allow Lost & Found to use your camera so you can photograph a lost or found item.",
+          "microphonePermission": false
         }
       ]
     ],
