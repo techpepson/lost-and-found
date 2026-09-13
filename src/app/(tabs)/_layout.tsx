@@ -1,76 +1,61 @@
-import { Tabs, useRouter } from "expo-router";
-import { StyleSheet } from "react-native";
-import { Home, PlusCircle, User } from "lucide-react-native";
-import { colors, spacing } from "@/constants/theme";
-import { useAuth } from "@/lib/auth-context";
-import { useEffect } from "react";
-
-export default function TabsLayout() {
-  const { user, isLoading } = useAuth();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!isLoading && !user) {
-      router.replace("/auth/login");
-    }
-  }, [user, isLoading, router]);
-
-  if (isLoading || !user) {
-    return null;
-  }
-
+import { withSession } from "../../components/SessionGate";
+import { Tabs } from "expo-router";
+import { Search, PlusCircle, LayoutDashboard, Bell } from "lucide-react-native";
+import { palette } from "../../components/ui";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+function TabsLayout() {
+  const insets = useSafeAreaInsets();
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: styles.tabBar,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textTertiary,
-        tabBarShowLabel: true,
-        tabBarLabelStyle: styles.tabLabel,
+        tabBarActiveTintColor: palette.blue,
+        tabBarInactiveTintColor: palette.muted,
+        tabBarHideOnKeyboard: true,
+        tabBarStyle: {
+          backgroundColor: "white",
+          borderTopColor: palette.line,
+          height: 72 + insets.bottom,
+          paddingTop: 4,
+          paddingBottom: Math.max(insets.bottom, 8),
+        },
+        tabBarLabelStyle: { fontSize: 12, lineHeight: 18, fontWeight: "600" },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: "Home",
-          tabBarIcon: ({ color, size }) => <Home size={size} color={color} />,
+          title: "Browse",
+          tabBarIcon: ({ color, size }) => <Search color={color} size={size} />,
         }}
       />
       <Tabs.Screen
         name="post"
         options={{
-          title: "Post",
+          title: "Report",
           tabBarIcon: ({ color, size }) => (
-            <PlusCircle size={size} color={color} />
+            <PlusCircle color={color} size={size} />
           ),
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
-          title: "Profile",
-          tabBarIcon: ({ color, size }) => <User size={size} color={color} />,
+          title: "My activity",
+          tabBarIcon: ({ color, size }) => (
+            <LayoutDashboard color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="updates"
+        options={{
+          title: "Updates",
+          tabBarIcon: ({ color, size }) => <Bell color={color} size={size} />,
         }}
       />
     </Tabs>
   );
 }
 
-const styles = StyleSheet.create({
-  tabBar: {
-    backgroundColor: colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    height: 88,
-    paddingBottom: spacing.md,
-    paddingTop: spacing.sm,
-    elevation: 0,
-    shadowOpacity: 0,
-  },
-  tabLabel: {
-    fontSize: 12,
-    fontWeight: "500",
-    marginTop: 4,
-  },
-});
+export default withSession(TabsLayout);

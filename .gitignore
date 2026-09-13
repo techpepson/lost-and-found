@@ -42,3 +42,10 @@ example
 # generated native folders
 /ios
 /android
+functions/lib/
+.firebase/
+*-debug.log
+.artifacts/
+functions/.env.*
+!functions/.env.example
+*.tgz

@@ -1,286 +1,306 @@
-import { useState, useCallback, useMemo } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  TextInput,
-  RefreshControl,
-  ActivityIndicator,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { View, Text, Pressable, useWindowDimensions } from "react-native";
 import { useRouter } from "expo-router";
-import { Search, SlidersHorizontal } from "lucide-react-native";
 import {
-  colors,
-  shadows,
-  spacing,
-  borderRadius,
-  typography,
-} from "@/constants/theme";
-import { Item, ItemStatus, ItemCategory } from "@/types";
-import { ItemCard } from "@/components/ItemCard";
-import { FilterChip } from "@/components/FilterChip";
-import { StatusToggle } from "@/components/StatusToggle";
-import { collection, query, orderBy, onSnapshot } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import { useFocusEffect } from "expo-router";
+  collection,
+  query,
+  where,
+  orderBy,
+  limit,
+  startAfter,
+  getDocs,
+  QueryDocumentSnapshot,
+  QueryConstraint,
+} from "firebase/firestore";
+import {
+  Search,
+  Plus,
+  SlidersHorizontal,
+  ShieldCheck,
+} from "lucide-react-native";
+import {
+  CATEGORIES,
+  LOCATIONS,
+  Report,
+  ReportType,
+} from "../../../shared/domain";
+import { db } from "../../lib/firebase";
+import { errorMessage } from "../../lib/api";
+import { ItemCard } from "../../components/ItemCard";
+import {
+  Page,
+  Card,
+  Field,
+  Select,
+  DateField,
+  Button,
+  Empty,
+  Loading,
+  Feedback,
+  s,
+  palette,
+} from "../../components/ui";
 
-const CATEGORIES: ItemCategory[] = [
-  "Phone",
-  "Wallet",
-  "ID Card",
-  "Bag",
-  "Keys",
-  "Others",
-];
-
-export default function HomeScreen() {
-  const [items, setItems] = useState<Item[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<ItemCategory | null>(
-    null,
-  );
-  const [selectedStatus, setSelectedStatus] = useState<ItemStatus>("lost");
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+export default function Browse() {
   const router = useRouter();
-
-  const fetchItems = useCallback(() => {
-    setIsLoading(true);
-    const q = query(collection(db, "items"), orderBy("createdAt", "desc"));
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const fetchedItems: Item[] = [];
-        snapshot.forEach((doc) => {
-          fetchedItems.push({ id: doc.id, ...doc.data() } as Item);
-        });
-        setItems(fetchedItems);
-        setIsLoading(false);
-        setIsRefreshing(false);
-      },
-      () => {
-        setIsLoading(false);
-        setIsRefreshing(false);
-      },
+  const width = useWindowDimensions().width;
+  const columns = width >= 1000 ? 3 : width >= 650 ? 2 : 1;
+  const [type, setType] = useState<ReportType>("found");
+  const [category, setCategory] = useState("All categories");
+  const [location, setLocation] = useState("All locations");
+  const [search, setSearch] = useState("");
+  const [term, setTerm] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [advanced, setAdvanced] = useState(false);
+  const [items, setItems] = useState<Report[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [more, setMore] = useState(true);
+  const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const cursor = useRef<QueryDocumentSnapshot | null>(null);
+  const generation = useRef(0);
+  useEffect(() => {
+    const timer = setTimeout(
+      () =>
+        setTerm(
+          search
+            .toLowerCase()
+            .replace(/[^a-z0-9 ]/g, " ")
+            .trim()
+            .split(/\s+/)[0]
+            ?.slice(0, 24) || "",
+        ),
+      350,
     );
-
-    return unsubscribe;
-  }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      const unsubscribe = fetchItems();
-      return () => unsubscribe();
-    }, [fetchItems]),
-  );
-
-  const filteredItems = useMemo(() => {
-    return items.filter((item) => {
-      const matchesStatus = item.status === selectedStatus;
-      const matchesCategory = selectedCategory
-        ? item.category === selectedCategory
-        : true;
-      const matchesSearch = searchQuery
-        ? item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          item.description.toLowerCase().includes(searchQuery.toLowerCase())
-        : true;
-
-      return matchesStatus && matchesCategory && matchesSearch;
-    });
-  }, [items, selectedStatus, selectedCategory, searchQuery]);
-
-  const handleRefresh = useCallback(() => {
-    setIsRefreshing(true);
-    fetchItems();
-  }, [fetchItems]);
-
-  const handleItemPress = useCallback(
-    (item: Item) => {
-      router.push(`/item/${item.id}`);
-    },
-    [router],
-  );
-
-  const renderItem = useCallback(
-    ({ item }: { item: Item }) => (
-      <ItemCard item={item} onPress={() => handleItemPress(item)} />
-    ),
-    [handleItemPress],
-  );
-
+    return () => clearTimeout(timer);
+  }, [search]);
+  const constraints = useMemo(() => {
+    const c: QueryConstraint[] = [
+      where("state", "==", "open"),
+      where("type", "==", type),
+    ];
+    if (category !== "All categories")
+      c.push(where("category", "==", category));
+    if (location !== "All locations") c.push(where("location", "==", location));
+    if (from) c.push(where("eventDate", ">=", from));
+    if (to) c.push(where("eventDate", "<=", to));
+    if (term.length >= 2) c.push(where("searchTokens", "array-contains", term));
+    c.push(orderBy("eventDate", "desc"), orderBy("createdAt", "desc"));
+    return c;
+  }, [type, category, location, from, to, term]);
+  async function fetchPage(reset: boolean, run: number) {
+    setLoading(true);
+    setError("");
+    try {
+      if (from && to && from > to)
+        throw new Error("The start date must be before the end date.");
+      const snap = await getDocs(
+        query(
+          collection(db, "reports"),
+          ...constraints,
+          ...(!reset && cursor.current ? [startAfter(cursor.current)] : []),
+          limit(18),
+        ),
+      );
+      if (generation.current !== run) return;
+      const rows = snap.docs.map((d) => ({ ...d.data(), id: d.id }) as Report);
+      setItems((previous) =>
+        reset
+          ? rows
+          : [
+              ...previous,
+              ...rows.filter((r) => !previous.some((p) => p.id === r.id)),
+            ],
+      );
+      cursor.current = snap.docs.at(-1) ?? null;
+      setMore(snap.size === 18);
+    } catch (e) {
+      if (generation.current === run) setError(errorMessage(e));
+    } finally {
+      if (generation.current === run) setLoading(false);
+    }
+  }
+  useEffect(() => {
+    const run = ++generation.current;
+    cursor.current = null;
+    setItems([]);
+    void fetchPage(true, run);
+    return () => {
+      generation.current++;
+    };
+  }, [constraints, revision]);
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Lost & Found</Text>
-        <Text style={styles.headerSubtitle}>
-          Help reunite lost items with their owners
-        </Text>
+    <Page
+      title="Around campus"
+      subtitle="Find your things. Help return someone else’s."
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          backgroundColor: "#E9EDE4",
+          padding: 4,
+          borderRadius: 12,
+        }}
+      >
+        {(["found", "lost"] as const).map((value) => (
+          <Pressable
+            key={value}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: type === value }}
+            onPress={() => setType(value)}
+            style={{
+              flex: 1,
+              minHeight: 46,
+              justifyContent: "center",
+              alignItems: "center",
+              borderRadius: 9,
+              backgroundColor: type === value ? "white" : "transparent",
+            }}
+          >
+            <Text
+              style={{
+                color: type === value ? palette.blue : palette.muted,
+                fontSize: 15,
+                fontWeight: "600",
+              }}
+            >
+              {value === "found" ? "Found items" : "Lost items"}
+            </Text>
+          </Pressable>
+        ))}
       </View>
-
-      <View style={styles.searchContainer}>
-        <View style={styles.searchInputContainer}>
-          <Search
-            size={20}
-            color={colors.textTertiary}
-            style={styles.searchIcon}
-          />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search items..."
-            placeholderTextColor={colors.textTertiary}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            testID="search-input"
-          />
-        </View>
-      </View>
-
-      <StatusToggle value={selectedStatus} onChange={setSelectedStatus} />
-
-      <View style={styles.categoriesContainer}>
-        <FlatList
-          data={CATEGORIES}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoriesList}
-          renderItem={({ item }) => (
-            <FilterChip
-              label={item}
-              isSelected={selectedCategory === item}
-              onPress={() =>
-                setSelectedCategory(selectedCategory === item ? null : item)
-              }
-            />
-          )}
-          keyExtractor={(item) => item}
+      <View style={{ gap: 14 }}>
+        <Field
+          label="Search items"
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Try phone, keys, or a brand…"
+          hint="One keyword works best — try a brand or item name."
         />
-      </View>
-
-      <View style={styles.resultsHeader}>
-        <Text style={styles.resultsText}>
-          {filteredItems.length} {filteredItems.length === 1 ? "item" : "items"}{" "}
-          found
-        </Text>
-        <TouchableOpacity style={styles.filterButton}>
-          <SlidersHorizontal size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
-
-      <FlatList
-        data={filteredItems}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={handleRefresh}
-            tintColor={colors.primary}
-          />
-        }
-        ListEmptyComponent={() => (
-          <View style={styles.emptyState}>
-            {isLoading ? (
-              <ActivityIndicator size="large" color={colors.primary} />
-            ) : (
-              <>
-                <Text style={styles.emptyTitle}>No items found</Text>
-                <Text style={styles.emptySubtitle}>
-                  Try adjusting your filters or search query
-                </Text>
-              </>
-            )}
-          </View>
+        <View style={[s.row, { justifyContent: "space-between" }]}>
+          <Button
+            small
+            tone="secondary"
+            icon={<SlidersHorizontal size={17} color={palette.blue} />}
+            onPress={() => setAdvanced((v) => !v)}
+          >
+            {advanced ? "Hide filters" : "Filters"}
+          </Button>
+          <Text style={s.small}>
+            {category !== "All categories" ? category : "All categories"}
+          </Text>
+        </View>
+        {advanced && (
+          <Card>
+            <Select
+              label="Category"
+              value={category}
+              options={["All categories", ...CATEGORIES]}
+              onChange={setCategory}
+            />
+            <View style={[s.row, { alignItems: "flex-start" }]}>
+              <View style={{ flex: 2, minWidth: 210 }}>
+                <Select
+                  label="Campus location"
+                  value={location}
+                  options={["All locations", ...LOCATIONS]}
+                  onChange={setLocation}
+                />
+              </View>
+              <View style={{ flex: 1, minWidth: 150 }}>
+                <DateField label="From date" value={from} onChange={setFrom} />
+              </View>
+              <View style={{ flex: 1, minWidth: 150 }}>
+                <DateField label="To date" value={to} onChange={setTo} />
+              </View>
+            </View>
+            <Button
+              small
+              tone="quiet"
+              onPress={() => {
+                setCategory("All categories");
+                setLocation("All locations");
+                setFrom("");
+                setTo("");
+                setSearch("");
+              }}
+            >
+              Clear all filters
+            </Button>
+          </Card>
         )}
-      />
-    </SafeAreaView>
+      </View>
+      <View style={[s.row, { justifyContent: "space-between" }]}>
+        <Text style={s.h2}>
+          {type === "found" ? "Found around campus" : "Still missing"}
+        </Text>
+        <Text style={s.small}>Newest first</Text>
+      </View>
+      {error && (
+        <Card>
+          <Feedback text={error} />
+          <Button tone="secondary" onPress={() => setRevision((v) => v + 1)}>
+            Try again
+          </Button>
+        </Card>
+      )}
+      {!loading && !error && !items.length && (
+        <Empty
+          title="No reports here yet"
+          detail="Try a different search or report your item. We’ll let you know when a possible match appears."
+        >
+          <Button
+            onPress={() =>
+              router.push({
+                pathname: "/post",
+                params: { type: type === "found" ? "lost" : "found" },
+              })
+            }
+          >
+            Create a report
+          </Button>
+        </Empty>
+      )}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", margin: -8 }}>
+        {items.map((item) => (
+          <View
+            key={item.id}
+            style={{ width: (100 / columns + "%") as `${number}%`, padding: 8 }}
+          >
+            <ItemCard
+              item={item}
+              onPress={() => router.push(("/item/" + item.id) as any)}
+            />
+          </View>
+        ))}
+      </View>
+      {loading && <Loading />}
+      {!loading && more && items.length > 0 && (
+        <Button
+          tone="secondary"
+          onPress={() => void fetchPage(false, generation.current)}
+        >
+          Load more reports
+        </Button>
+      )}
+      <View
+        style={[
+          s.row,
+          {
+            flexWrap: "nowrap",
+            backgroundColor: "#EAF0E7",
+            padding: 18,
+            borderRadius: 12,
+          },
+        ]}
+      >
+        <ShieldCheck color={palette.blue} size={24} />
+        <Text style={[s.small, { flex: 1 }]}>
+          A similar item is a starting point. Ownership is checked privately
+          before every confirmed handover.
+        </Text>
+      </View>
+    </Page>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  header: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.md,
-  },
-  headerTitle: {
-    ...typography.h1,
-    color: colors.textPrimary,
-  },
-  headerSubtitle: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-    marginTop: spacing.xs,
-  },
-  searchContainer: {
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.md,
-  },
-  searchInputContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing.md,
-    ...shadows.sm,
-  },
-  searchIcon: {
-    marginRight: spacing.sm,
-  },
-  searchInput: {
-    flex: 1,
-    height: 48,
-    fontSize: 16,
-    color: colors.textPrimary,
-  },
-  categoriesContainer: {
-    marginBottom: spacing.md,
-  },
-  categoriesList: {
-    paddingHorizontal: spacing.lg,
-    gap: spacing.sm,
-  },
-  resultsHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
-  },
-  resultsText: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-    fontWeight: "500",
-  },
-  filterButton: {
-    padding: spacing.sm,
-  },
-  listContent: {
-    padding: spacing.lg,
-    paddingTop: 0,
-    gap: spacing.md,
-  },
-  emptyState: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: spacing.xxl,
-  },
-  emptyTitle: {
-    ...typography.h3,
-    color: colors.textSecondary,
-    marginBottom: spacing.sm,
-  },
-  emptySubtitle: {
-    ...typography.bodySmall,
-    color: colors.textTertiary,
-  },
-});

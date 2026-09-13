@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "lost_and_found",
+    "name": "Legon Lost & Found",
     "slug": "lost_and_found",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -23,7 +23,7 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -45,7 +45,8 @@
           "cameraPermission": "Allow Lost & Found to use your camera so you can photograph a lost or found item.",
           "microphonePermission": false
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,

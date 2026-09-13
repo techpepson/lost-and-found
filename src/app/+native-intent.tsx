@@ -1,9 +1,9 @@
+import { appPath } from "../../shared/navigation";
 export function redirectSystemPath({
-  path: _path,
-  initial: _initial,
+  path,
 }: {
   path: string;
   initial: boolean;
 }) {
-  return "/";
+  return appPath(path);
 }

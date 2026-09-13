@@ -1,453 +1,352 @@
-import { useState, useCallback, useEffect } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Image,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-  Linking,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { withSession } from "../../components/SessionGate";
+import { useMemo, useState } from "react";
+import { View, Text, useWindowDimensions } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
-  ArrowLeft,
-  MapPin,
-  Calendar,
-  Mail,
-  Bookmark,
-  BookmarkCheck,
-  User,
-} from "lucide-react-native";
-import {
-  colors,
-  shadows,
-  spacing,
-  borderRadius,
-  typography,
-} from "@/constants/theme";
-import { Item, ItemStatus } from "@/types";
-import { useAuth } from "@/lib/auth-context";
-import { db } from "@/lib/firebase";
-import {
   doc,
-  getDoc,
   setDoc,
   deleteDoc,
-  query,
-  collection,
   where,
-  getDocs,
+  orderBy,
+  limit,
+  serverTimestamp,
 } from "firebase/firestore";
-import { LinearGradient } from "expo-linear-gradient";
-import * as Haptics from "expo-haptics";
+import { ShieldCheck, Bookmark, LockKeyhole } from "lucide-react-native";
+import { Report } from "../../../shared/domain";
+import { useDocument, useCollection } from "../../lib/data";
+import { useAuth } from "../../lib/auth-context";
+import { db } from "../../lib/firebase";
+import { mutate, errorMessage } from "../../lib/api";
+import { ReportPhoto, formatDate } from "../../components/ItemCard";
+import {
+  Page,
+  Card,
+  Button,
+  Badge,
+  Field,
+  Select,
+  Check,
+  Feedback,
+  Loading,
+  QueryError,
+  Empty,
+  s,
+  palette,
+} from "../../components/ui";
 
-const statusColors: Record<
-  ItemStatus,
-  { bg: string; text: string; gradient: [string, string] }
-> = {
-  lost: {
-    bg: colors.lost + "15",
-    text: colors.lost,
-    gradient: ["#EF4444", "#DC2626"] as [string, string],
-  },
-  found: {
-    bg: colors.found + "15",
-    text: colors.found,
-    gradient: ["#10B981", "#059669"] as [string, string],
-  },
-};
-
-export default function ItemDetailsScreen() {
+function ItemDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [item, setItem] = useState<Item | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaved, setIsSaved] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const { user } = useAuth();
+  const report = useDocument<Report>("reports", id);
+  const { user, isAdmin } = useAuth();
   const router = useRouter();
-
-  useEffect(() => {
-    const fetchItem = async () => {
-      if (!id) return;
-
-      const docRef = doc(db, "items", id);
-      const docSnap = await getDoc(docRef);
-
-      if (docSnap.exists()) {
-        setItem({ id: docSnap.id, ...docSnap.data() } as Item);
-      }
-
-      setIsLoading(false);
-    };
-
-    void fetchItem();
-  }, [id]);
-
-  useEffect(() => {
-    const checkIfSaved = async () => {
-      if (!user || !id) return;
-
-      const q = query(
-        collection(db, "savedItems"),
-        where("userId", "==", user.uid),
-        where("itemId", "==", id),
-      );
-
-      const snapshot = await getDocs(q);
-      setIsSaved(!snapshot.empty);
-    };
-
-    void checkIfSaved();
-  }, [user, id]);
-
-  const toggleSave = useCallback(async () => {
-    if (!user || !item) {
-      Alert.alert("Error", "You must be signed in to save items");
-      return;
-    }
-
-    setIsSaving(true);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
+  const wide = useWindowDimensions().width >= 850;
+  const bookmarks = useCollection<{ id: string }>(
+    "savedItems",
+    useMemo(
+      () => [
+        where("userId", "==", user?.uid ?? ""),
+        where("reportId", "==", id),
+      ],
+      [id, user?.uid],
+    ),
+    !!user,
+  );
+  const own = report.data?.authorId === user?.uid;
+  const secret = useDocument<{ privateDetails: string }>(
+    "reportPrivate",
+    own || isAdmin ? id : null,
+  );
+  const lostReports = useCollection<Report>(
+    "reports",
+    useMemo(
+      () => [
+        where("authorId", "==", user?.uid ?? ""),
+        orderBy("createdAt", "desc"),
+        limit(100),
+      ],
+      [user?.uid],
+    ),
+    !!user,
+  );
+  const [claiming, setClaiming] = useState(false);
+  const [answers, setAnswers] = useState("");
+  const [circumstances, setCircumstances] = useState("");
+  const [linked, setLinked] = useState("No previous report");
+  const [accepted, setAccepted] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function execute(work: () => Promise<void>) {
+    setError("");
+    setBusy(true);
     try {
-      if (isSaved) {
-        const q = query(
-          collection(db, "savedItems"),
-          where("userId", "==", user.uid),
-          where("itemId", "==", item.id),
-        );
-        const snapshot = await getDocs(q);
-        snapshot.forEach(async (doc) => {
-          await deleteDoc(doc.ref);
-        });
-        setIsSaved(false);
-      } else {
-        await setDoc(doc(collection(db, "savedItems")), {
-          userId: user.uid,
-          itemId: item.id,
-          savedAt: new Date(),
-        });
-        setIsSaved(true);
-        void Haptics.notificationAsync(
-          Haptics.NotificationFeedbackType.Success,
-        );
-      }
-    } catch {
-      Alert.alert("Error", "Failed to save item");
+      await work();
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
-      setIsSaving(false);
+      setBusy(false);
     }
-  }, [isSaved, item, user]);
-
-  const handleContact = useCallback(() => {
-    if (!item?.authorEmail) {
-      Alert.alert("Error", "No contact information available");
-      return;
-    }
-
-    const subject = encodeURIComponent(
-      item.status === "lost"
-        ? `Found your ${item.title}`
-        : `Claiming ${item.title}`,
-    );
-    const body = encodeURIComponent(
-      `Hi,\n\nI saw your post about "${item.title}" on Lost & Found.\n\n`,
-    );
-
-    void Linking.openURL(
-      `mailto:${item.authorEmail}?subject=${subject}&body=${body}`,
-    );
-  }, [item]);
-
-  if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-        </View>
-      </SafeAreaView>
-    );
   }
-
-  if (!item) {
+  if (report.loading) return <Loading />;
+  if (report.error)
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Item not found</Text>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Text style={styles.backLink}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
+      <Page title="Couldn’t open this report">
+        <QueryError error={report.error} retry={report.retry} />
+      </Page>
     );
-  }
-
-  const statusColor = statusColors[item.status];
-
+  if (!report.data)
+    return (
+      <Page title="Report unavailable">
+        <Empty
+          title="This report could not be found"
+          detail="It may have been closed or may belong to the earlier version of the service."
+        >
+          <Button onPress={() => router.push("/")}>Browse reports</Button>
+        </Empty>
+      </Page>
+    );
+  const item = report.data;
+  const availableLost = lostReports.data.filter(
+    (r) => r.type === "lost" && r.state === "open",
+  );
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-          activeOpacity={0.8}
-        >
-          <ArrowLeft size={24} color={colors.textPrimary} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.saveButton}
-          onPress={toggleSave}
-          disabled={isSaving}
-          activeOpacity={0.8}
-        >
-          {isSaved ? (
-            <BookmarkCheck size={24} color={colors.primary} />
-          ) : (
-            <Bookmark size={24} color={colors.textTertiary} />
+    <Page title={item.title} eyebrow="Item report">
+      <Feedback text={error} />
+      <View style={{ flexDirection: wide ? "row" : "column", gap: 24 }}>
+        <View style={{ flex: 1.4, gap: 20 }}>
+          <Card>
+            <ReportPhoto report={item} large />
+            <View style={s.row}>
+              <Badge tone={item.type === "found" ? "green" : "gold"}>
+                {item.type === "found" ? "Found item" : "Lost item"}
+              </Badge>
+              <Badge tone="gray">{item.state}</Badge>
+              <Badge>{item.category}</Badge>
+            </View>
+            <Text style={s.body}>{item.description}</Text>
+            <View style={s.separator} />
+            {[
+              ["Location", item.location],
+              ["Nearby", item.locationDetail],
+              [
+                "Date",
+                formatDate(item.eventDate) +
+                  (item.approximateDate ? " · approximate" : ""),
+              ],
+              ["Brand / model", item.brand],
+              ["Color", item.color],
+            ]
+              .filter(([, v]) => v)
+              .map(([label, value]) => (
+                <View
+                  key={label}
+                  style={[s.row, { justifyContent: "space-between" }]}
+                >
+                  <Text style={s.label}>{label}</Text>
+                  <Text style={[s.body, { flexShrink: 1 }]}>{value}</Text>
+                </View>
+              ))}
+          </Card>
+          {(own || isAdmin) && (
+            <Card>
+              <View style={s.row}>
+                <LockKeyhole size={21} color={palette.blue} />
+                <Text style={s.h2}>Private reference details</Text>
+              </View>
+              {secret.error ? (
+                <Feedback text={secret.error} />
+              ) : (
+                <Text style={s.body}>
+                  {secret.data?.privateDetails || "Loading private details…"}
+                </Text>
+              )}
+              <Text style={s.small}>
+                Visible only to the report author and authorized administrators.
+              </Text>
+            </Card>
           )}
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
-        <View style={styles.imageContainer}>
-          {item.imageUrl ? (
-            <Image source={{ uri: item.imageUrl }} style={styles.image} />
-          ) : (
-            <LinearGradient
-              colors={statusColor.gradient}
-              style={styles.placeholderImage}
-            >
-              <Text style={styles.placeholderText}>
-                {item.title.charAt(0).toUpperCase()}
+        </View>
+        <View style={{ flex: 1, gap: 20 }}>
+          <Card>
+            <ShieldCheck size={30} color={palette.blue} />
+            <Text style={s.h2}>
+              {own
+                ? "Your report"
+                : item.type === "found"
+                  ? "Could this be yours?"
+                  : "Have you found this item?"}
+            </Text>
+            <Text style={s.body}>
+              {own
+                ? "Follow your claims and possible matches from My activity."
+                : item.type === "found"
+                  ? "Describe details that were not shown publicly. The finder or an administrator will review your claim."
+                  : "Create a found report with your own observations and private clues. The owner can then claim it through a verified process."}
+            </Text>
+            {own ? (
+              <>
+                <Button onPress={() => router.push("/profile")}>
+                  Open my activity
+                </Button>
+                {["open", "draft"].includes(item.state) && (
+                  <Button
+                    tone="secondary"
+                    onPress={() =>
+                      router.push({ pathname: "/post", params: { id } })
+                    }
+                  >
+                    Edit report
+                  </Button>
+                )}
+                {["open", "draft"].includes(item.state) && (
+                  <Button tone="quiet" onPress={() => setClosing((v) => !v)}>
+                    Close this report
+                  </Button>
+                )}
+              </>
+            ) : item.type === "found" ? (
+              <Button
+                disabled={item.state !== "open"}
+                onPress={() => setClaiming((v) => !v)}
+              >
+                {item.state === "open"
+                  ? claiming
+                    ? "Hide claim form"
+                    : "Start an ownership claim"
+                  : "This item is " + item.state}
+              </Button>
+            ) : (
+              <Button
+                onPress={() =>
+                  router.push({ pathname: "/post", params: { type: "found" } })
+                }
+              >
+                Report what I found
+              </Button>
+            )}
+            {!own && (
+              <Button
+                tone="secondary"
+                disabled={busy || !!bookmarks.error}
+                icon={<Bookmark size={18} color={palette.blue} />}
+                onPress={() =>
+                  execute(async () => {
+                    const r = doc(db, "savedItems", user!.uid + "_" + id);
+                    if (bookmarks.data.length) await deleteDoc(r);
+                    else
+                      await setDoc(r, {
+                        userId: user!.uid,
+                        reportId: id,
+                        createdAt: serverTimestamp(),
+                      });
+                  })
+                }
+              >
+                {bookmarks.data.length
+                  ? "Remove from saved"
+                  : "Save this report"}
+              </Button>
+            )}
+            <Feedback text={bookmarks.error} />
+            {item.requiresAdmin && (
+              <Text style={s.small}>
+                This item requires administrative ownership review.
               </Text>
-            </LinearGradient>
+            )}
+          </Card>
+          {closing && (
+            <Card>
+              <Text style={s.h2}>Close without verified recovery</Text>
+              <Text style={s.body}>
+                Use this when the report is no longer needed or the item was
+                returned outside this service. It will not count as a verified
+                recovery.
+              </Text>
+              <Field
+                label="Reason for closing"
+                value={reason}
+                onChangeText={setReason}
+                multiline
+              />
+              <Button
+                tone="danger"
+                busy={busy}
+                onPress={() =>
+                  execute(async () => {
+                    await mutate("closeReport", { id, note: reason });
+                    setClosing(false);
+                  })
+                }
+              >
+                Confirm close
+              </Button>
+            </Card>
           )}
-          <LinearGradient
-            colors={statusColor.gradient}
-            style={styles.statusBadge}
-          >
-            <Text style={styles.statusText}>
-              {item.status === "lost" ? "Lost" : "Found"}
-            </Text>
-          </LinearGradient>
-        </View>
-
-        <View style={styles.content}>
-          <Text style={styles.category}>{item.category}</Text>
-          <Text style={styles.title}>{item.title}</Text>
-
-          <View style={styles.infoContainer}>
-            <View style={styles.infoRow}>
-              <MapPin size={18} color={colors.textSecondary} />
-              <Text style={styles.infoText}>{item.location}</Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Calendar size={18} color={colors.textSecondary} />
-              <Text style={styles.infoText}>
-                {new Date(item.date).toLocaleDateString("en-US", {
-                  weekday: "long",
-                  year: "numeric",
-                  month: "long",
-                  day: "numeric",
-                })}
+          {claiming && (
+            <Card>
+              <Text style={s.h2}>Make your ownership claim</Text>
+              <Field
+                label="Private identifying details"
+                value={answers}
+                onChangeText={setAnswers}
+                multiline
+                maxLength={2000}
+                placeholder="Describe unique marks, an inscription, or other details only the owner would know."
+                hint="Do not include passwords or device unlock codes."
+              />
+              <Field
+                label="Where and how did you lose it?"
+                value={circumstances}
+                onChangeText={setCircumstances}
+                multiline
+                maxLength={1500}
+              />
+              <Select
+                label="Link your lost report (optional)"
+                value={linked}
+                options={[
+                  "No previous report",
+                  ...availableLost.map((r) => r.title + " · " + r.id),
+                ]}
+                onChange={setLinked}
+              />
+              <Text style={s.small}>
+                After submitting, you can upload earlier photos or receipts.
+                Evidence images are visible only to you and administrators; the
+                finder sees your written claim.
               </Text>
-            </View>
-            <View style={styles.infoRow}>
-              <User size={18} color={colors.textSecondary} />
-              <Text style={styles.infoText}>
-                Posted by {item.authorEmail?.split("@")[0] || "Anonymous"}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Description</Text>
-            <Text style={styles.description}>{item.description}</Text>
-          </View>
+              <Check
+                label="These details are accurate to the best of my knowledge, and I understand that this claim will be reviewed."
+                value={accepted}
+                onChange={setAccepted}
+              />
+              <Button
+                busy={busy}
+                disabled={!accepted}
+                onPress={() =>
+                  execute(async () => {
+                    const linkedReport = availableLost.find(
+                      (r) => r.title + " · " + r.id === linked,
+                    );
+                    const result = await mutate("submitClaim", {
+                      reportId: id,
+                      answers,
+                      circumstances,
+                      lostReportId: linkedReport?.id ?? null,
+                    });
+                    router.push(("/claim/" + result.id) as any);
+                  })
+                }
+              >
+                Submit claim
+              </Button>
+            </Card>
+          )}
         </View>
-      </ScrollView>
-
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={styles.contactButton}
-          onPress={handleContact}
-          activeOpacity={0.8}
-        >
-          <LinearGradient
-            colors={[colors.gradientStart, colors.gradientEnd]}
-            style={styles.contactGradient}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-          >
-            <Mail size={20} color={colors.textInverse} />
-            <Text style={styles.contactButtonText}>
-              Contact {item.status === "lost" ? "Owner" : "Finder"}
-            </Text>
-          </LinearGradient>
-        </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </Page>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: borderRadius.full,
-    backgroundColor: colors.surface,
-    justifyContent: "center",
-    alignItems: "center",
-    ...shadows.sm,
-  },
-  saveButton: {
-    width: 40,
-    height: 40,
-    borderRadius: borderRadius.full,
-    backgroundColor: colors.surface,
-    justifyContent: "center",
-    alignItems: "center",
-    ...shadows.sm,
-  },
-  scrollContent: {
-    paddingBottom: spacing.xxl,
-  },
-  imageContainer: {
-    position: "relative",
-    marginHorizontal: spacing.lg,
-    borderRadius: borderRadius.xl,
-    overflow: "hidden",
-    ...shadows.lg,
-  },
-  image: {
-    width: "100%",
-    height: 300,
-    resizeMode: "cover",
-  },
-  placeholderImage: {
-    width: "100%",
-    height: 300,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  placeholderText: {
-    fontSize: 64,
-    fontWeight: "700",
-    color: colors.textInverse,
-  },
-  statusBadge: {
-    position: "absolute",
-    top: spacing.md,
-    left: spacing.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-  },
-  statusText: {
-    ...typography.caption,
-    color: colors.textInverse,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
-  content: {
-    padding: spacing.lg,
-  },
-  category: {
-    ...typography.caption,
-    color: colors.primary,
-    textTransform: "uppercase",
-    marginBottom: spacing.xs,
-  },
-  title: {
-    ...typography.h2,
-    color: colors.textPrimary,
-    marginBottom: spacing.lg,
-  },
-  infoContainer: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
-    ...shadows.sm,
-  },
-  infoRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  infoText: {
-    ...typography.body,
-    color: colors.textSecondary,
-  },
-  section: {
-    marginBottom: spacing.lg,
-  },
-  sectionTitle: {
-    ...typography.h4,
-    color: colors.textPrimary,
-    marginBottom: spacing.sm,
-  },
-  description: {
-    ...typography.body,
-    color: colors.textSecondary,
-    lineHeight: 24,
-  },
-  footer: {
-    padding: spacing.lg,
-    paddingTop: 0,
-    backgroundColor: colors.background,
-  },
-  contactButton: {
-    borderRadius: borderRadius.lg,
-    overflow: "hidden",
-    ...shadows.md,
-  },
-  contactGradient: {
-    height: 56,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-  },
-  contactButtonText: {
-    ...typography.button,
-    color: colors.textInverse,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  errorText: {
-    ...typography.h3,
-    color: colors.textSecondary,
-    marginBottom: spacing.md,
-  },
-  backLink: {
-    ...typography.button,
-    color: colors.primary,
-  },
-});
+export default withSession(ItemDetail);

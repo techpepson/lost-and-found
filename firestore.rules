@@ -1,65 +1,43 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    function isSignedIn() {
-      return request.auth != null;
+    function signed() { return request.auth != null; }
+    function active() { return signed() && (!exists(/databases/$(database)/documents/users/$(request.auth.uid)) || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('suspended', false) == false); }
+    function member() { return active() && request.auth.token.email_verified == true && (request.auth.token.get('admin', false) == true || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('eligible', false) == true); }
+    function admin() { return member() && request.auth.token.get('admin', false) == true && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('adminEnabled', false) == true; }
+    function own(uid) { return active() && request.auth.uid == uid; }
+    function participant(data) { return member() && request.auth.uid in data.participantIds; }
+    match /users/{uid} { allow read: if own(uid) || admin(); allow write: if false; }
+    match /reports/{id} {
+      allow read: if member() && (resource.data.state in ['open', 'reserved', 'recovered'] || resource.data.authorId == request.auth.uid || admin());
+      allow write: if false;
     }
-
-    function isOwner(uid) {
-      return isSignedIn() && request.auth.uid == uid;
+    match /reportPrivate/{id} { allow read: if member() && (resource.data.authorId == request.auth.uid || admin()); allow write: if false; }
+    match /claims/{id} { allow read: if participant(resource.data) || admin(); allow write: if false; }
+    match /handovers/{id} {
+      allow get: if admin() || participant(get(/databases/$(database)/documents/claims/$(id)).data);
+      allow list: if participant(resource.data) || admin(); allow write: if false;
     }
-
-    // A user's own profile document. Written once at sign-up.
-    match /users/{uid} {
-      allow get: if isOwner(uid);
-      allow create: if isOwner(uid)
-                    && request.resource.data.uid == uid
-                    && request.resource.data.email == request.auth.token.email;
-      allow update: if isOwner(uid)
-                    && request.resource.data.uid == resource.data.uid;
-      allow delete: if false;
-      allow list: if false;
+    match /disputes/{id} { allow read: if participant(resource.data) || admin(); allow write: if false; }
+    match /auditEvents/{id} { allow read: if participant(resource.data) || admin(); allow write: if false; }
+    match /matches/{id} { allow read: if participant(resource.data) || admin(); allow write: if false; }
+    match /evidence/{id} { allow read: if member() && (resource.data.userId == request.auth.uid || admin()); allow write: if false; }
+    match /recoveries/{id} { allow read: if admin(); allow write: if false; }
+    match /notifications/{id} {
+      allow read: if own(resource.data.userId);
+      allow update: if own(resource.data.userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) && request.resource.data.read is bool;
+      allow create, delete: if false;
     }
-
-    // Lost and found posts. Readable by any signed-in user, writable only by
-    // the account that created them.
-    match /items/{itemId} {
-      function validItem(data) {
-        return data.title is string && data.title.size() > 0 && data.title.size() <= 60
-               && data.description is string && data.description.size() > 0
-               && data.location is string && data.location.size() > 0
-               && data.status in ['lost', 'found']
-               && data.category in ['Phone', 'Wallet', 'ID Card', 'Bag', 'Keys', 'Others'];
-      }
-
-      allow read: if isSignedIn();
-      allow create: if isSignedIn()
-                    && request.resource.data.authorId == request.auth.uid
-                    && request.resource.data.authorEmail == request.auth.token.email
-                    && request.resource.data.createdAt == request.time
-                    && validItem(request.resource.data);
-      allow update: if isOwner(resource.data.authorId)
-                    && request.resource.data.authorId == resource.data.authorId
-                    && request.resource.data.createdAt == resource.data.createdAt
-                    && validItem(request.resource.data);
-      allow delete: if isOwner(resource.data.authorId);
-    }
-
-    // Bookmarks. Each document is private to the user who created it.
-    match /savedItems/{savedId} {
-      allow read: if isOwner(resource.data.userId);
-      allow create: if isSignedIn()
-                    && request.resource.data.userId == request.auth.uid
-                    && request.resource.data.itemId is string;
+    match /savedItems/{id} {
+      allow read, delete: if own(resource.data.userId);
+      allow create: if member() && request.resource.data.keys().hasOnly(['userId', 'reportId', 'createdAt'])
+        && request.resource.data.userId == request.auth.uid && request.resource.data.reportId is string
+        && id == request.auth.uid + '_' + request.resource.data.reportId && request.resource.data.createdAt == request.time
+        && get(/databases/$(database)/documents/reports/$(request.resource.data.reportId)).data.state in ['open', 'reserved', 'recovered'];
       allow update: if false;
-      allow delete: if isOwner(resource.data.userId);
     }
-
-    // Anything not matched above is denied.
-    match /{document=**} {
-      allow read, write: if false;
-    }
+    // Legacy posts may contain exposed identifiers. Keep them quarantined until reviewed.
+    match /items/{id} { allow read: if admin() || own(resource.data.authorId); allow write: if false; }
+    match /{document=**} { allow read, write: if false; }
   }
 }

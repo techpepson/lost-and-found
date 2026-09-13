@@ -5,6 +5,7 @@ import {
   initializeAuth,
   type Auth,
   type Persistence,
+  connectAuthEmulator,
 } from "firebase/auth";
 // The `firebase` umbrella package maps ./auth to browser types unconditionally,
 // so getReactNativePersistence is missing from the type surface even though
@@ -26,9 +27,10 @@ interface ReactNativeAsyncStorage {
 const getReactNativePersistence = untypedRnPersistence as (
   storage: ReactNativeAsyncStorage,
 ) => Persistence;
-import { getFirestore } from "firebase/firestore";
-import { getStorage } from "firebase/storage";
+import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
+import { getStorage, connectStorageEmulator } from "firebase/storage";
 import { Platform } from "react-native";
+import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -76,5 +78,24 @@ const auth: Auth = createAuth();
 
 export const db = getFirestore(app);
 export const storage = getStorage(app);
+export const functions = getFunctions(app, "europe-west1");
+const globals = globalThis as typeof globalThis & {
+  recoveryEmulatorsConnected?: boolean;
+};
+if (
+  process.env.EXPO_PUBLIC_USE_EMULATORS === "true" &&
+  !globals.recoveryEmulatorsConnected
+) {
+  const host =
+    process.env.EXPO_PUBLIC_EMULATOR_HOST ||
+    (Platform.OS === "android" ? "10.0.2.2" : "127.0.0.1");
+  connectAuthEmulator(auth, "http://" + host + ":9099", {
+    disableWarnings: true,
+  });
+  connectFirestoreEmulator(db, host, 8080);
+  connectStorageEmulator(storage, host, 9199);
+  connectFunctionsEmulator(functions, host, 5001);
+  globals.recoveryEmulatorsConnected = true;
+}
 export { auth };
 export default app;

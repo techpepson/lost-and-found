@@ -1,124 +1,138 @@
-import { StyleSheet, Text, View, TouchableOpacity } from "react-native";
-import { Image } from "expo-image";
-import { MapPin, Calendar, Tag } from "lucide-react-native";
-import { colors, borderRadius, spacing, typography, shadows } from "../constants/theme";
-import { Item } from "../types";
-
-interface ItemCardProps {
-  item: Item;
-  onPress: () => void;
-}
-
-export function ItemCard({ item, onPress }: ItemCardProps) {
-  const isLost = item.status === "lost";
-
+import { View, Text, Pressable, Image } from "react-native";
+import {
+  MapPin,
+  CalendarDays,
+  Smartphone,
+  Laptop,
+  Wallet,
+  KeyRound,
+  Package,
+  CreditCard,
+  ArrowUpRight,
+} from "lucide-react-native";
+import { Report } from "../../shared/domain";
+import { Badge, palette, s } from "./ui";
+import { useProtectedImage } from "../lib/api";
+export function ReportPhoto({
+  report,
+  large = false,
+}: {
+  report: Report;
+  large?: boolean;
+}) {
+  const { uri, error } = useProtectedImage(report.photoPath);
+  const Icon =
+    (
+      {
+        Phone: Smartphone,
+        Laptop,
+        Wallet,
+        Keys: KeyRound,
+        "ID Card": CreditCard,
+      } as Record<string, typeof Package>
+    )[report.category] || Package;
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.9} testID={`item-card-${item.id}`}>
-      {item.imageUrl ? (
-        <Image source={{ uri: item.imageUrl }} style={styles.image} contentFit="cover" />
+    <View
+      style={{
+        height: large ? 260 : report.photoPath ? 180 : 108,
+        backgroundColor: report.type === "found" ? "#E9EDE4" : "#FFF3D8",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 12,
+        overflow: "hidden",
+      }}
+    >
+      {uri ? (
+        <Image
+          accessibilityLabel={report.title}
+          source={{ uri }}
+          style={{ width: "100%", height: "100%" }}
+          resizeMode="cover"
+        />
       ) : (
-        <View style={[styles.imagePlaceholder, { backgroundColor: isLost ? "#FEE2E2" : "#D1FAE5" }]}>
-          <Tag size={32} color={isLost ? colors.lost : colors.found} />
-        </View>
+        <>
+          <Icon
+            size={large ? 72 : 48}
+            strokeWidth={1.3}
+            color={report.type === "found" ? "#738475" : "#9D762C"}
+          />
+          {error && (
+            <Text style={[s.small, { paddingTop: 10 }]}>Photo unavailable</Text>
+          )}
+        </>
       )}
-
-      <View style={styles.content}>
-        <View style={styles.headerRow}>
-          <View style={[styles.statusBadge, { backgroundColor: isLost ? colors.lost : colors.found }]}>
-            <Text style={styles.statusText}>{item.status.toUpperCase()}</Text>
-          </View>
-          <Text style={styles.category}>{item.category}</Text>
-        </View>
-
-        <Text style={styles.title} numberOfLines={1}>{item.title}</Text>
-        <Text style={styles.description} numberOfLines={2}>{item.description}</Text>
-
-        <View style={styles.metaRow}>
-          <View style={styles.metaItem}>
-            <MapPin size={14} color={colors.textTertiary} />
-            <Text style={styles.metaText} numberOfLines={1}>{item.location}</Text>
-          </View>
-          <View style={styles.metaItem}>
-            <Calendar size={14} color={colors.textTertiary} />
-            <Text style={styles.metaText} numberOfLines={1}>{item.date}</Text>
-          </View>
-        </View>
-      </View>
-    </TouchableOpacity>
+    </View>
   );
 }
-
-const styles = StyleSheet.create({
-  card: {
-    flexDirection: "row",
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    marginVertical: spacing.sm,
-    marginHorizontal: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    overflow: "hidden",
-    ...shadows.sm,
-  },
-  image: {
-    width: 110,
-    height: 110,
-  },
-  imagePlaceholder: {
-    width: 110,
-    height: 110,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  content: {
-    flex: 1,
-    padding: spacing.sm,
-    justifyContent: "space-between",
-  },
-  headerRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  statusBadge: {
-    paddingHorizontal: spacing.xs + 2,
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-  },
-  statusText: {
-    color: colors.textInverse,
-    fontSize: 10,
-    fontWeight: "700",
-  },
-  category: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: "600",
-  },
-  title: {
-    ...typography.h4,
-    color: colors.textPrimary,
-    marginTop: 4,
-  },
-  description: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-    marginVertical: 4,
-  },
-  metaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    marginTop: 4,
-  },
-  metaItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    flex: 1,
-  },
-  metaText: {
-    fontSize: 12,
-    color: colors.textTertiary,
-  },
-});
+export function ItemCard({
+  item,
+  onPress,
+}: {
+  item: Report;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={item.title + ", " + item.type + ", " + item.location}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        backgroundColor: "white",
+        borderWidth: 1,
+        borderColor: palette.line,
+        borderRadius: 16,
+        padding: 12,
+        gap: 14,
+        opacity: pressed ? 0.8 : 1,
+        height: "100%",
+      })}
+    >
+      <ReportPhoto report={item} />
+      <View style={{ padding: 5, gap: 10 }}>
+        <View style={[s.row, { justifyContent: "space-between" }]}>
+          <Badge tone={item.type === "found" ? "green" : "gold"}>
+            {item.type === "found" ? "Found item" : "Lost item"}
+          </Badge>
+          <Text style={s.small}>{item.category}</Text>
+        </View>
+        <View style={[s.row, { flexWrap: "nowrap" }]}>
+          <Text style={[s.h2, { flex: 1, fontSize: 19 }]} numberOfLines={2}>
+            {item.title}
+          </Text>
+          <ArrowUpRight size={19} color={palette.muted} />
+        </View>
+        <Text style={s.small} numberOfLines={2}>
+          {item.description}
+        </Text>
+        <View style={[s.row, { gap: 7 }]}>
+          <MapPin size={15} color={palette.muted} />
+          <Text style={[s.small, { flex: 1 }]} numberOfLines={1}>
+            {item.location}
+          </Text>
+        </View>
+        <View style={[s.row, { gap: 7 }]}>
+          <CalendarDays size={15} color={palette.muted} />
+          <Text style={s.small}>
+            {formatDate(item.eventDate)}
+            {item.approximateDate ? " · approximate" : ""}
+          </Text>
+          {item.state !== "open" && <Badge tone="gray">{item.state}</Badge>}
+        </View>
+      </View>
+    </Pressable>
+  );
+}
+export function formatDate(value: string | number) {
+  const date = new Date(
+    typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ? value + "T12:00:00Z"
+      : value,
+  );
+  return Number.isNaN(date.getTime())
+    ? "Date unavailable"
+    : date.toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+}

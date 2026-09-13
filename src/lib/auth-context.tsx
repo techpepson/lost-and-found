@@ -1,138 +1,138 @@
-import createContextHook from "@nkzw/create-context-hook";
-import { auth, db } from "./firebase";
 import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  ReactNode,
+} from "react";
+import {
+  User,
+  onIdTokenChanged,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
-  onAuthStateChanged,
-  User,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  updateProfile,
 } from "firebase/auth";
-import { doc, setDoc, getDoc } from "firebase/firestore";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { auth } from "./firebase";
+import { mutate, errorMessage } from "./api";
 
-interface UserData {
-  uid: string;
-  email: string | null;
-  displayName?: string | null;
-  createdAt: Date;
-}
-
-interface AuthContextType {
+interface AuthState {
   user: User | null;
-  userData: UserData | null;
   isLoading: boolean;
-  signUp: (email: string, password: string) => Promise<void>;
+  isAdmin: boolean;
+  verified: boolean;
+  error: string;
+  signUp: (email: string, password: string, name?: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  refresh: () => Promise<void>;
+  verify: () => Promise<void>;
+  reset: (email: string) => Promise<void>;
 }
-
-export const [AuthProvider, useAuth] = createContextHook<AuthContextType>(
-  () => {
-    const [user, setUser] = useState<User | null>(null);
-    const [userData, setUserData] = useState<UserData | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-
-    useEffect(() => {
-      const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-        setUser(firebaseUser);
-
-        if (firebaseUser) {
-          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
-          if (userDoc.exists()) {
-            setUserData(userDoc.data() as UserData);
+const Context = createContext<AuthState | null>(null);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setLoading] = useState(true);
+  const [isAdmin, setAdmin] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let generation = 0;
+    let active = true;
+    const off = onIdTokenChanged(
+      auth,
+      async (current) => {
+        const run = ++generation;
+        setLoading(true);
+        setError("");
+        setUser(current);
+        setAdmin(false);
+        setVerified(current?.emailVerified ?? false);
+        try {
+          if (current) {
+            const token = await current.getIdTokenResult();
+            await mutate("syncProfile");
+            if (active && run === generation)
+              setAdmin(token.claims.admin === true);
           }
-        } else {
-          setUserData(null);
+        } catch (e) {
+          if (active && run === generation) setError(errorMessage(e));
+        } finally {
+          if (active && run === generation) setLoading(false);
         }
-
-        setIsLoading(false);
-      });
-
-      return () => unsubscribe();
-    }, []);
-
-    const signUp = useCallback(async (email: string, password: string) => {
-      try {
-        const { user: newUser } = await createUserWithEmailAndPassword(
-          auth,
-          email,
-          password,
-        );
-        const userData: UserData = {
-          uid: newUser.uid,
-          email: newUser.email,
-          createdAt: new Date(),
-        };
-        await setDoc(doc(db, "users", newUser.uid), userData);
-        setUserData(userData);
-      } catch (error: any) {
-        console.error("Auth context signup error:", error);
-
-        // Provide user-friendly error messages
-        if (error.code === "auth/email-already-in-use") {
-          throw new Error(
-            "This email is already registered. Please sign in instead.",
-          );
-        } else if (error.code === "auth/invalid-email") {
-          throw new Error("Please enter a valid email address.");
-        } else if (error.code === "auth/weak-password") {
-          throw new Error(
-            "Password is too weak. Please use at least 6 characters.",
-          );
-        } else if (error.code === "auth/network-request-failed") {
-          throw new Error(
-            "Network error. Please check your internet connection.",
-          );
-        } else if (error.code === "auth/configuration-not-found") {
-          throw new Error(
-            "Firebase is not properly configured. Please contact support.",
-          );
-        } else {
-          throw new Error(
-            error.message || "Failed to create account. Please try again.",
-          );
+      },
+      (e) => {
+        if (active) {
+          setError(errorMessage(e));
+          setLoading(false);
         }
-      }
-    }, []);
-
-    const signIn = useCallback(async (email: string, password: string) => {
-      try {
-        await signInWithEmailAndPassword(auth, email, password);
-      } catch (error: any) {
-        console.error("Auth context signin error:", error);
-
-        // Provide user-friendly error messages
-        if (error.code === "auth/user-not-found") {
-          throw new Error(
-            "No account found with this email. Please sign up first.",
-          );
-        } else if (error.code === "auth/wrong-password") {
-          throw new Error("Incorrect password. Please try again.");
-        } else if (error.code === "auth/invalid-email") {
-          throw new Error("Please enter a valid email address.");
-        } else if (error.code === "auth/invalid-credential") {
-          throw new Error("Invalid email or password. Please try again.");
-        } else if (error.code === "auth/network-request-failed") {
-          throw new Error(
-            "Network error. Please check your internet connection.",
-          );
-        } else if (error.code === "auth/too-many-requests") {
-          throw new Error("Too many failed attempts. Please try again later.");
-        } else {
-          throw new Error(
-            error.message || "Failed to sign in. Please try again.",
-          );
-        }
-      }
-    }, []);
-
-    const logout = useCallback(async () => {
-      await signOut(auth);
-    }, []);
-
-    return useMemo(
-      () => ({ user, userData, isLoading, signUp, signIn, logout }),
-      [user, userData, isLoading, signUp, signIn, logout],
+      },
     );
-  },
-);
+    return () => {
+      active = false;
+      off();
+    };
+  }, []);
+  const sync = async () => {
+    await mutate("syncProfile");
+  };
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      if (auth.currentUser) {
+        await auth.currentUser.reload();
+        await auth.currentUser.getIdToken(true);
+        setUser(auth.currentUser);
+        setVerified(auth.currentUser.emailVerified);
+        await sync();
+      }
+      setError("");
+    } catch (e) {
+      setError(errorMessage(e));
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  };
+  const signUp = async (email: string, password: string, name = "") => {
+    const result = await createUserWithEmailAndPassword(
+      auth,
+      email.trim(),
+      password,
+    );
+    await updateProfile(result.user, { displayName: name.trim() });
+    await sendEmailVerification(result.user);
+    await sync();
+  };
+  const signIn = async (email: string, password: string) => {
+    await signInWithEmailAndPassword(auth, email.trim(), password);
+  };
+  return (
+    <Context.Provider
+      value={{
+        user,
+        isLoading,
+        isAdmin,
+        verified,
+        error,
+        signUp,
+        signIn,
+        logout: () => signOut(auth),
+        refresh,
+        verify: async () => {
+          if (auth.currentUser) await sendEmailVerification(auth.currentUser);
+        },
+        reset: (email) => sendPasswordResetEmail(auth, email.trim()),
+      }}
+    >
+      {children}
+    </Context.Provider>
+  );
+}
+export function useAuth() {
+  const context = useContext(Context);
+  if (!context) throw new Error("AuthProvider is missing.");
+  return context;
+}
